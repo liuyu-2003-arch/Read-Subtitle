@@ -172,10 +172,10 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="max-w-6xl mx-auto px-6 py-16 md:py-32"
+            className="max-w-6xl mx-auto px-6 py-12 md:py-20"
           >
             {/* Header Section */}
-            <header className="relative mb-24">
+            <header className="relative mb-16">
               <div className="flex flex-col md:flex-row md:items-end justify-between gap-12">
                 <div className="space-y-6">
                   <div className="flex items-center gap-4">
@@ -292,7 +292,13 @@ const ReaderView = ({ filename, onBack }: { filename: string; onBack: () => void
   const [selectedWord, setSelectedWord] = useState<{ text: string; lineIndex: number } | null>(null);
   const [wordTranslation, setWordTranslation] = useState<string | null>(null);
   const [isTranslatingWord, setIsTranslatingWord] = useState(false);
+  
+  // Hover Preview State
+  const [hoverTime, setHoverTime] = useState<number | null>(null);
+  const [hoverX, setHoverX] = useState<number>(0);
+  
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const startTimeRef = useRef<number>(0);
   const lineRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   useEffect(() => {
@@ -323,9 +329,9 @@ const ReaderView = ({ filename, onBack }: { filename: string; onBack: () => void
 
   useEffect(() => {
     if (isPlaying) {
-      const startTime = Date.now() - currentTime * 1000;
+      startTimeRef.current = Date.now() - currentTime * 1000;
       timerRef.current = setInterval(() => {
-        const elapsed = (Date.now() - startTime) / 1000;
+        const elapsed = (Date.now() - startTimeRef.current) / 1000;
         if (elapsed >= totalDuration) {
           setIsPlaying(false);
           setCurrentTime(totalDuration);
@@ -341,6 +347,13 @@ const ReaderView = ({ filename, onBack }: { filename: string; onBack: () => void
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [isPlaying, totalDuration]);
+
+  const handleSeek = (val: number) => {
+    setCurrentTime(val);
+    if (isPlaying) {
+      startTimeRef.current = Date.now() - val * 1000;
+    }
+  };
 
   useEffect(() => {
     if (!data) return;
@@ -360,12 +373,18 @@ const ReaderView = ({ filename, onBack }: { filename: string; onBack: () => void
   const handleTranslate = async (index: number) => {
     if (!data || translations[index] || isTranslating) return;
 
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      setTranslations(prev => ({ ...prev, [index]: "Error: GEMINI_API_KEY not set in environment." }));
+      return;
+    }
+
     const text = data.parsed_json[index].text;
     if (!text.trim()) return;
 
     setIsTranslating(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: `Translate the following subtitle line. If it is English, translate to Chinese. If it is Chinese, translate to English. Return ONLY the translated text, no explanations or quotes: "${text}"`,
@@ -375,6 +394,7 @@ const ReaderView = ({ filename, onBack }: { filename: string; onBack: () => void
       setTranslations(prev => ({ ...prev, [index]: translatedText }));
     } catch (err) {
       console.error("Translation failed", err);
+      setTranslations(prev => ({ ...prev, [index]: "Translation failed. Check console." }));
     } finally {
       setIsTranslating(false);
     }
@@ -385,7 +405,7 @@ const ReaderView = ({ filename, onBack }: { filename: string; onBack: () => void
     const startTime = timeToSeconds(data.parsed_json[index].start);
     // Add a tiny offset to ensure we fall within the line's range 
     // and avoid boundary issues with the previous line's end time.
-    setCurrentTime(startTime + 0.01);
+    handleSeek(startTime + 0.01);
     setActiveLineIndex(index);
     setSelectedWord(null); // Clear word focus when clicking a line
     handleTranslate(index); // Manually trigger translation on click
@@ -400,8 +420,15 @@ const ReaderView = ({ filename, onBack }: { filename: string; onBack: () => void
     setIsTranslatingWord(true);
     setWordTranslation(null);
 
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      setWordTranslation("Error: GEMINI_API_KEY not set.");
+      setIsTranslatingWord(false);
+      return;
+    }
+
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: `Translate this specific word/phrase from the subtitle. If English, translate to Chinese. If Chinese, translate to English. Provide a very brief definition or equivalent: "${cleanWord}"`,
@@ -409,6 +436,7 @@ const ReaderView = ({ filename, onBack }: { filename: string; onBack: () => void
       setWordTranslation(response.text?.trim() || "");
     } catch (err) {
       console.error("Word translation failed", err);
+      setWordTranslation("Translation failed.");
     } finally {
       setIsTranslatingWord(false);
     }
@@ -505,9 +533,37 @@ const ReaderView = ({ filename, onBack }: { filename: string; onBack: () => void
               <span>{formatTime(currentTime)}</span>
               <span>{formatTime(totalDuration)}</span>
             </div>
-            <div className="relative h-1.5 bg-[#1a1a1a]/5 rounded-full overflow-hidden">
+            <div className="relative h-1.5 bg-[#1a1a1a]/5 rounded-full">
+              {/* Preview Tooltip */}
+              <AnimatePresence>
+                {hoverTime !== null && data && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10, scale: 0.9 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.9 }}
+                    className="absolute bottom-full mb-4 pointer-events-none z-[60]"
+                    style={{ left: `${(hoverTime / totalDuration) * 100}%`, transform: 'translateX(-50%)' }}
+                  >
+                    <div className="bg-[#1a1a1a] text-white px-4 py-3 rounded-2xl soft-shadow min-w-[200px] max-w-[300px] space-y-2">
+                      <div className="text-[10px] font-mono font-bold opacity-40 uppercase tracking-widest">
+                        {formatTime(hoverTime)}
+                      </div>
+                      <div className="serif text-sm leading-relaxed line-clamp-2">
+                        {data.parsed_json.find(line => {
+                          const start = timeToSeconds(line.start);
+                          const end = timeToSeconds(line.end);
+                          return hoverTime >= start && hoverTime <= end;
+                        })?.text || "..."}
+                      </div>
+                    </div>
+                    {/* Arrow */}
+                    <div className="w-3 h-3 bg-[#1a1a1a] rotate-45 absolute -bottom-1.5 left-1/2 -translate-x-1/2" />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               <motion.div 
-                className="absolute inset-y-0 left-0 bg-[#1a1a1a]"
+                className="absolute inset-y-0 left-0 bg-[#1a1a1a] rounded-full"
                 style={{ width: `${(currentTime / totalDuration) * 100}%` }}
               />
               <input 
@@ -516,8 +572,16 @@ const ReaderView = ({ filename, onBack }: { filename: string; onBack: () => void
                 max={totalDuration} 
                 step="0.1"
                 value={currentTime}
-                onChange={(e) => setCurrentTime(parseFloat(e.target.value))}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                onChange={(e) => handleSeek(parseFloat(e.target.value))}
+                onMouseMove={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const x = e.clientX - rect.left;
+                  const percent = x / rect.width;
+                  setHoverTime(percent * totalDuration);
+                  setHoverX(x);
+                }}
+                onMouseLeave={() => setHoverTime(null)}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
               />
             </div>
           </div>
@@ -532,7 +596,7 @@ const ReaderView = ({ filename, onBack }: { filename: string; onBack: () => void
         </div>
       </div>
 
-      <main className="flex-1 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-20 px-8 py-20 pb-48">
+      <main className="flex-1 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-20 px-8 py-12 pb-48">
         {/* Transcript Area */}
         <div className="space-y-20">
           <header className="space-y-8">
